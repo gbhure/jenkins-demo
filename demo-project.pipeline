@@ -1,0 +1,24 @@
+pipeline {
+    agent any
+    tools {
+        maven "maven3.9.5"
+    }
+    stages {
+        stage('stage1 - clone your project') {
+            steps {
+                echo 'cloning a public repository'
+                git branch: 'main', url: "https://github.com/gbhure/mvn-project.git"
+            }
+        }
+        stage('stage2') {
+            steps {
+                sh "pwd"
+            }
+        }
+        stage('building the maven project') {
+            steps {
+                sh "mvn install"
+            }
+        }
+    }
+}
