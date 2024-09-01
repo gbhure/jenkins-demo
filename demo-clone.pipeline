@@ -1,0 +1,23 @@
+pipeline {
+    agent any
+
+    stages {
+        stage('Hello') {
+            steps {
+                echo 'Hello World'
+            }
+        }
+        stage('clone your project') {
+            steps {
+                echo 'clone your git repo'
+                git branch: 'main', credentialsId: '286c64d6-ced1-469d-847b-0cfc321a3316', url: 'https://github.com/gbhure/mvn-proj-31aug24.git'
+                sh 'ls'
+            }
+        }
+        stage('build your project') {
+            steps {
+                echo 'build your project from git'
+            }
+        }
+    }
+}
