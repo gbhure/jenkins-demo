@@ -1,0 +1,74 @@
+import org.yaml.snakeyaml.Yaml
+import thread.*
+import utils.Constants
+import jenkins.model.Jenkins
+
+def releases = ("${RELEASES}".isEmpty()) ? ["2021.1.0"] :  "${RELEASES}".split(',')
+def url = ("${Project_URL}".isEmpty()) ? "" [] : "${Project_URL}".split(',')
+def email_address = ("${Email_Address}".isEmpty()) ? "" [] : "${Email_Address}".split(',')
+def today = new Date().format("MMMdd_yyyy")
+def projectName, prevProjectName, prev_scan_day, deltaReport
+def jira_count = 0
+
+def get_prev_scan_day() {
+    // some code here
+}
+
+pipeline {
+    agent { label 'whitesource' }
+    stages {
+        stage('Prepare') {
+            steps {
+                script {
+                    echo "Preparing.."
+                    }
+                }
+            }
+        }
+        stage('Pull projects') {
+            steps {
+                script {
+                    echo "Clone/Update the projects";
+                    }
+                }
+            }
+        }
+        stage('White Source Scanning') {
+            steps {
+                script {
+                    echo "Scanning started..."
+                }
+            }
+        }
+        stage('Report') {
+            steps {
+                script {
+                    echo "Generating Report.."
+                }
+            }
+        }
+        stage('CVE Report - Delta') {
+            steps {
+                script {
+                    echo "Generating difference between today's and previous scan CVE Reports.."
+                    }
+                }
+            }
+        }
+        stage('Creating JIRA Tickets for Vulnerabilities..') {
+            steps {
+                script {
+                    echo "Creating JIRA Tickets for Vulnerabilities.."
+                }
+            }
+        }
+    }
+    post {
+        always {
+            script {
+                echo "Always executed -- Final steps"
+                }
+            }
+        }
+    }
+}
