@@ -1,0 +1,189 @@
+import org.yaml.snakeyaml.Yaml
+import thread.*
+import utils.Constants
+import jenkins.model.Jenkins
+
+def releases = ("${RELEASES}".isEmpty()) ? ["2021.1.0"] :  "${RELEASES}".split(',')
+def url = ("${Project_URL}".isEmpty()) ? "" [] : "${Project_URL}".split(',')
+def email_address = ("${Email_Address}".isEmpty()) ? "" [] : "${Email_Address}".split(',')
+def today = new Date().format("MMMdd_yyyy")
+def projectName, prevProjectName, prev_scan_day, deltaReport
+def jira_count = 0
+
+def get_prev_scan_day() {
+    def simpleDateformat = new java.text.SimpleDateFormat("EEEE");
+    String dayOfWeek = simpleDateformat.format(new Date());
+    if ("${dayOfWeek}" == "Monday" || "${dayOfWeek}" == "Tuesday") {
+        return (new Date()-3).format("MMMdd_yyyy")
+    } else if ("${dayOfWeek}" == "Sunday") {
+        return (new Date()-7).format("MMMdd_yyyy")
+    } else {
+        return (new Date()-2).format("MMMdd_yyyy")
+    }
+}
+
+pipeline {
+    agent { label 'whitesource' }
+    stages {
+        stage('Prepare') {
+            steps {
+                script {
+                    echo "Preparing.."
+                    ws = new Constants()
+                    prev_scan_day = get_prev_scan_day()
+                    releases.each { release ->
+                        dir ("${ws.basepath}") {
+                            sh (script: """
+                                [[ ! -d ${release} ]] && mkdir ${release}
+                                cp "${ws.projectList}" ${release}
+                            """, returnStatus:true)
+                        }
+                    }
+                }
+            }
+        }
+        stage('Pull projects') {
+            steps {
+                script {
+                    echo "Clone/Update the projects";
+                    releases.each { release ->
+                        def GIT_BRANCH = ("${release}" == "2021.1.0") ? "master" : "${release}"
+                        dir ("${ws.basepath}"+"${release}") {
+                            if ( ("${Single_Project_Scan_URL}" == "True") || ("${Single_Project_Scan_File_Upload}" == "True") ) {
+                                if ("${Single_Project_Scan_URL}" == "True") {
+                                    println "Cloning given project using git URL -- ${url}"
+                                    url.each { line ->
+                                        try {
+                                            sh (script: "git clone -b ${GIT_BRANCH} --single-branch ${line}", returnStdout: true).trim()
+                                        } catch (err) {
+                                            echo "Caught: ${err}"
+                                        }
+                                    }
+                                } else {
+                                    println "Copying given project to scan location"
+                                    //new File("${ws.basepath}"+"${release}").eachFile { file ->
+                                        //if (file.name.endsWith(".gz")) {
+                                            //sh (script: "gunzip file.name", returnStdout: true)
+                                        //}
+                                    //}
+                                }
+                            } else {
+                                def all_projects = readFile(file: "${ws.projectList}")
+                                println "Cloning all projects using git URLs"
+                                //sh (script: "git clone -b ${GIT_BRANCH} --single-branch git@matrix.appviewx.in:certificate/cert_mgmt.git", returnStdout: true).trim()
+                                all_projects.split('\n').each { line ->
+                                    try {
+                                        sh (script: "git clone -b ${GIT_BRANCH} --single-branch ${line}", returnStdout: true).trim()
+                                    } catch (err) {
+                                        echo "Caught: ${err}"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    // no release--file upload case
+                }
+            }
+        }
+        stage('White Source Scanning') {
+            steps {
+                script {
+                    echo "Scanning started..."
+                    releases.each { release ->
+                        projectName = "appviewX_${release}_${today}"
+                        dir ("${ws.basepath}"+"${release}") {
+                            sh (script: "java -jar ${ws.basepath}/whitesource-cofig/wss-unified-agent.jar -c ${ws.basepath}/whitesource-cofig/wss-unified-agent-modified.config -product ${projectName} -project ${projectName} -d .", returnStatus: true)
+                        }
+                    }
+                }
+            }
+        }
+        stage('Report') {
+            steps {
+                script {
+                    echo "Generating Report.."
+                    releases.each { release ->
+                        projectName = "appviewX_${release}_${today}"
+                        dir ("${ws.basepath}") {
+                            sh (script: "./WSRequiredJSONFiles.sh ${projectName}", returnStdout:true)
+                            sh (script: """
+                                curl -s ${ws.whiteSourceAPI} -d @license_excel.json --header \"Content-Type: application/json\" -o ws_license_report_${projectName}.xlsx
+                                curl -s ${ws.whiteSourceAPI} -d @cve_excel.json --header \"Content-Type: application/json\" -o ws_cve_report_${projectName}.xlsx
+                            """, returnStatus:true)
+                            //sh (script: "rm -rf license_excel.json cve_excel.json", returnStatus:true)
+                        }
+                    }
+                }
+            }
+        }
+        stage('CVE Report - Delta') {
+            steps {
+                script {
+                    echo "Generating difference between today's and previous scan CVE Reports.."
+                    releases.each { release ->
+                        projectName = "appviewX_${release}_${today}"
+                        prevScanProjectName = "appviewX_${release}_${prev_scan_day}"
+                        // check if prev scan file exists.. if not then dont get delta
+                        deltaReport = "ws_cve_report_last_run_delta_${projectName}.xlsx"
+                        dir ("${ws.basepath}") {
+                            //def response = sh (script: "curl -s ${ws.whiteSourceAPI} -d @cve_excel.json --header \"Content-Type: application/json\" -o ws_cve_report_${prevScanProjectName}.xlsx", returnStdout: true).trim()
+                            // get the unique vulnerabilities
+                            //sh (script: "python ${ws.cveReportDeltaScript} ${ws.basepath} ws_cve_report_${projectName}.xlsx ws_cve_report_${prevScanProjectName}.xlsx ${deltaReport}", returnStatus:true)
+                        }
+                    }
+                }
+            }
+        }
+        stage('Creating JIRA Tickets for Vulnerabilities..') {
+            steps {
+                script {
+                    echo "Creating JIRA Tickets for Vulnerabilities.."
+                    sh (script: "python ${ws.jiraCreateScript} ${ws.basepath} ws_cve_report_${projectName}.xlsx", returnStatus:true)
+                    jira_count = readFile(file: "${ws.basepath}"+"vulnerability_count.txt")
+                    //new File("${ws.basepath}"+"vulnerability_count.txt").delete()
+                }
+            }
+        }
+    }
+    post {
+        always {
+            script {
+                echo "Always executed -- Final steps"
+                dir ("${ws.basepath}") {
+                    //println "Sending report on email.."
+                    releases.each { release ->
+                        projectName = "appviewX_${release}_${today}"
+                        prevScanProjectName = "appviewX_${release}_${prev_scan_day}"
+                        //deltaReport = "ws_cve_report_last_run_delta_${projectName}.xlsx"
+                        To = "technicalleads@appviewx.com,compliance@appviewx.com,engineeringmanagers@appviewx.com,cc:devops@appviewx.com"
+                        if (!"${Email_Address}".isEmpty()) {
+                            To = email_address.join(',')
+                        }
+                        if ("${jira_count}" == "0") {
+                            println "No new vulnerabilities found!. No report generated. ${jira_count}"
+                            emailext body: "Hi Team, <br><br>The whitesource scan has been completed for ${projectName}. No new vulnerabilities found!<br><br>Thanks<br>DevOps Team",
+                                from: 'appviewxci@payodaweb.com', mimeType: 'text/html', 
+                                subject: "Whitesource Scan Report [${release} release]: ${today}", 
+                                to: "${To}"
+                        } else {
+                            println "Sending report..${jira_count}"
+                            //emailext attachmentsPattern: "${deltaReport}, ws_cve_report_${projectName}.xlsx", 
+                            emailext attachmentsPattern: "ws_cve_report_${projectName}.xlsx", 
+                                body: "Hi Team, <br><br>The whitesource scan has been completed for ${projectName}. Please find attached the report generated <br> \
+                                       <br>Total vulnerabilities raised today [JIRA tickets count]: ${jira_count} \
+                                       <br>Jira project URL: <a href='https://appviewx.atlassian.net/jira/software/c/projects/EIS/issues'>Enterprise Information Security</a><br> \
+                                       <br>Thanks<br>DevOps Team",
+                                from: 'appviewxci@payodaweb.com', mimeType: 'text/html', 
+                                subject: "Whitesource Scan Report [${release} release]: ${today}", 
+                                to: "${To}"
+                            //println "Sent files: ${deltaReport}, ws_cve_report_${projectName}.xlsx"
+                            println "Sent files: ws_cve_report_${projectName}.xlsx"
+                        }
+                        // clean up
+                        sh (script: "rm -rf ${release}*", returnStatus:true)
+                    }
+                }
+            }
+        }
+    }
+}
